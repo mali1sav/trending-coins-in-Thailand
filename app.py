@@ -162,27 +162,57 @@ def get_recent_trends(results, hours=6):
     return sorted(recent_trends, key=lambda x: x['avg_interest'], reverse=True)[:5]
 
 def main():
-    st.title("ThailandCryptocurrency Trends Analysis ")
-    st.write("Analyzing Google Trends data for cryptocurrencies in Thailand")
-
-    # Add hours selector
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        hours = st.slider("Select hours to analyze", min_value=1, max_value=72, value=6)
-
+    st.title("Cryptocurrency Trends Analysis ")
+    
     # Get top coins (cached)
-    with st.spinner("Fetching cryptocurrency data..."):
+    with st.spinner("Fetching top 20 cryptocurrencies by market cap..."):
         filtered_coins = get_top_coins()
+        st.caption(f"Data sourced from CoinGecko - Top {len(filtered_coins)} coins by market cap")
+    
+    # Add custom coin input
+    custom_coins = st.text_input(
+        "Add custom coins (optional)",
+        placeholder="Enter coin symbols separated by commas (e.g., BTC, ETH, DOGE)",
+        help="Enter additional coin symbols to track, separated by commas"
+    )
+    
+    # Process custom coins if provided
+    if custom_coins:
+        custom_symbols = [s.strip().upper() for s in custom_coins.split(',')]
+        # Add custom coins to the filtered list if they're not already there
+        existing_symbols = {coin['symbol'].upper() for coin in filtered_coins}
+        for symbol in custom_symbols:
+            if symbol and symbol not in existing_symbols:
+                try:
+                    # Try to get coin info from CoinGecko
+                    cg = CoinGeckoAPI()
+                    coins_list = cg.get_coins_list()
+                    coin_info = next((coin for coin in coins_list if coin['symbol'].upper() == symbol), None)
+                    if coin_info:
+                        coin_data = cg.get_coin_by_id(coin_info['id'])
+                        filtered_coins.append({
+                            'id': coin_info['id'],
+                            'symbol': symbol,
+                            'name': coin_info['name'],
+                            'market_cap_rank': coin_data.get('market_cap_rank', 9999)
+                        })
+                except Exception as e:
+                    st.warning(f"Could not fetch data for {symbol}: {str(e)}")
 
     # Process coins sequentially
     results = []
+    errors = []
+    
     with st.spinner("Fetching Google Trends data..."):
         progress_bar = st.progress(0)
         
         for i, coin in enumerate(filtered_coins):
             result = fetch_google_trends(coin)
             if result:
-                results.append(result)
+                if 'error' in result:
+                    errors.append(result)
+                else:
+                    results.append(result)
             progress_bar.progress((i + 1) / len(filtered_coins))
             time.sleep(1)  # Add delay between requests
         
@@ -192,12 +222,12 @@ def main():
             st.error("No trend data available. Please try again later.")
             return
 
-        # Get top 5 trending coins in the last N hours
-        top_trending = get_recent_trends(results, hours)
+        # Get top 5 trending coins in the last 6 hours
+        top_trending = get_recent_trends(results, hours=6)
         
         # Display top trending coins
-        st.header(" Top 5 Trending Coins")
-        st.caption(f"Based on search interest in the last {hours} hours")
+        st.header(" Top 5 Trending Coins in Thailand")
+        st.caption("Based on search interest in the last 6 hours")
         
         # Create columns for trending coins
         cols = st.columns(5)
@@ -210,7 +240,6 @@ def main():
                 )
         
         st.markdown("---")
-        st.subheader(" Detailed Trends")
 
         # Prepare data for visualization
         trend_data = []
@@ -258,6 +287,13 @@ def main():
             st.write("Processed the following coins:")
             for coin in filtered_coins:
                 st.write(f"- {coin['name']} ({coin['symbol'].upper()})")
+                
+        # Add expander for errors at the bottom
+        if errors:
+            with st.expander("Show Error Details"):
+                st.write("The following coins had errors during processing:")
+                for error in errors:
+                    st.write(f"- {error['coin']} ({error['symbol']}): {error['error']}")
 
 if __name__ == "__main__":
     main()
