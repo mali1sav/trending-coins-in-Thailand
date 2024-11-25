@@ -27,7 +27,6 @@ COIN_SEARCH_TERMS = {
     'ETH': 'Ethereum',
     'SOL': 'Solana',
     'XRP': 'Ripple',
-    'BNB': 'Binance',
     'ADA': 'Cardano',
     'DOGE': 'Dogecoin',
     'AVAX': 'Avalanche',
@@ -198,7 +197,7 @@ def fetch_google_trends(coin):
     return None
 
 def get_recent_trends(results, hours=6):
-    """Get the most recent trend data and calculate trend strength"""
+    """Get the most recent trend data and calculate average interest"""
     recent_trends = []
     
     for result in results:
@@ -207,74 +206,35 @@ def get_recent_trends(results, hours=6):
             df = pd.DataFrame(trends)
             df['date'] = pd.to_datetime(df['date'])
             
-            # Sort by date to ensure proper order
-            df = df.sort_values('date')
+            # Get just the last 6 hours of data
+            recent_data = df.nlargest(hours, 'date')
             
-            # Calculate trend strength
-            if len(df) > 1:
-                # Calculate the overall trend using linear regression
-                x = np.arange(len(df))
-                slope, _, r_value, _, _ = stats.linregress(x, df['value'])
-                
-                # Get recent and historical metrics
-                recent_data = df.nlargest(hours, 'date')
-                recent_avg = recent_data['value'].mean()
-                max_value = df['value'].max()
-                
-                # Calculate momentum (acceleration of trend)
-                if len(df) > 2:
-                    half_point = len(df) // 2
-                    recent_slope, _, _, _, _ = stats.linregress(x[-half_point:], df['value'].iloc[-half_point:])
-                    older_slope, _, _, _, _ = stats.linregress(x[:half_point], df['value'].iloc[:half_point])
-                    momentum = recent_slope - older_slope
-                else:
-                    momentum = 0
-                
-                # Normalize components
-                norm_slope = slope * 50  # Scale slope to be comparable
-                norm_momentum = momentum * 25  # Scale momentum to be smaller than slope
-                norm_recent = recent_avg  # Keep recent average as is
-                norm_peak = max_value * 0.25  # Reduce impact of peak values
-                
-                # Combine factors into a single score
-                trend_score = (
-                    norm_slope +     # Trend direction and strength
-                    norm_momentum +  # Trend acceleration
-                    norm_recent +    # Recent performance
-                    norm_peak       # Peak performance (reduced impact)
-                )
-                
+            if not recent_data.empty:
+                avg_interest = recent_data['value'].mean()
                 recent_trends.append({
                     'coin': result['coin'],
                     'symbol': result['symbol'],
                     'search_term': result['search_term'],
-                    'avg_interest': recent_avg,
-                    'trend_score': trend_score,
-                    'slope': slope,
-                    'momentum': momentum
+                    'avg_interest': avg_interest
                 })
     
-    # Sort by trend score instead of just average interest
-    sorted_trends = sorted(recent_trends, key=lambda x: x['trend_score'], reverse=True)
+    # Sort by average interest and return top 5
+    sorted_trends = sorted(recent_trends, key=lambda x: x['avg_interest'], reverse=True)
     
-    # Add trend direction indicators with momentum
+    # Add trend indicators
     for trend in sorted_trends:
-        if trend['slope'] > 0:
-            trend['direction'] = '↗️' if trend['momentum'] >= 0 else '➡️'
-        elif trend['slope'] < 0:
-            trend['direction'] = '↘️' if trend['momentum'] <= 0 else '➡️'
+        if trend['avg_interest'] > 0:
+            trend['direction'] = '↗️'
         else:
             trend['direction'] = '➡️'
     
     # Show debug information in sidebar
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### Trend Scores")
+    st.sidebar.markdown("### Search Interest (Last 6 Hours)")
     for trend in sorted_trends:
         st.sidebar.write(f"{trend['symbol']}:")
-        st.sidebar.write(f"- Score: {trend['trend_score']:.1f}")
-        st.sidebar.write(f"- Slope: {trend['slope']:.3f}")
-        st.sidebar.write(f"- Momentum: {trend['momentum']:.3f}")
-        st.sidebar.write(f"- Recent Avg: {trend['avg_interest']:.1f}")
+        st.sidebar.write(f"- Search term: {trend['search_term']}")
+        st.sidebar.write(f"- Interest: {trend['avg_interest']:.1f}")
     
     return sorted_trends[:5]
 
