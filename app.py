@@ -8,6 +8,8 @@ import time
 import json
 import os
 from pathlib import Path
+import numpy as np
+from scipy import stats
 
 # Initialize APIs
 cg = CoinGeckoAPI()
@@ -140,7 +142,7 @@ def fetch_google_trends(coin):
     return None
 
 def get_recent_trends(results, hours=6):
-    """Get the most recent trend data and calculate average interest"""
+    """Get the most recent trend data and calculate trend strength"""
     recent_trends = []
     
     for result in results:
@@ -148,31 +150,66 @@ def get_recent_trends(results, hours=6):
         if trends:
             df = pd.DataFrame(trends)
             df['date'] = pd.to_datetime(df['date'])
-            recent_data = df.nlargest(hours, 'date')
             
-            if not recent_data.empty:
-                avg_interest = recent_data['value'].mean()
+            # Sort by date to ensure proper order
+            df = df.sort_values('date')
+            
+            # Calculate trend strength
+            if len(df) > 1:
+                # Calculate the overall trend using linear regression
+                x = np.arange(len(df))
+                slope, _, r_value, _, _ = stats.linregress(x, df['value'])
+                
+                # Calculate weighted score based on:
+                # 1. Trend direction and strength (slope)
+                # 2. Recent values (last 6 hours average)
+                # 3. Maximum value reached
+                recent_data = df.nlargest(hours, 'date')
+                recent_avg = recent_data['value'].mean()
+                max_value = df['value'].max()
+                
+                # Combine factors into a single score
+                trend_score = (
+                    slope * 100 +  # Trend direction and strength
+                    recent_avg +   # Recent performance
+                    max_value * 0.5  # Peak performance
+                )
+                
                 recent_trends.append({
                     'coin': result['coin'],
                     'symbol': result['symbol'],
                     'search_term': result['search_term'],
-                    'avg_interest': avg_interest
+                    'avg_interest': recent_avg,
+                    'trend_score': trend_score,
+                    'slope': slope
                 })
     
-    return sorted(recent_trends, key=lambda x: x['avg_interest'], reverse=True)[:5]
+    # Sort by trend score instead of just average interest
+    sorted_trends = sorted(recent_trends, key=lambda x: x['trend_score'], reverse=True)
+    
+    # Add trend direction indicators
+    for trend in sorted_trends:
+        if trend['slope'] > 0:
+            trend['direction'] = '↗️'  # Rising
+        elif trend['slope'] < 0:
+            trend['direction'] = '↘️'  # Falling
+        else:
+            trend['direction'] = '➡️'  # Stable
+    
+    return sorted_trends[:5]
 
 def main():
-    st.title("Cryptocurrency Trends Analysis ")
+    st.title("Trending Cryptocurrency in Thailand")
     
     # Get top coins (cached)
     with st.spinner("Fetching top 20 cryptocurrencies by market cap..."):
         filtered_coins = get_top_coins()
-        st.caption(f"Data sourced from CoinGecko - Top {len(filtered_coins)} coins by market cap")
+        st.caption(f"Data sourced from CoinGecko - Top {len(filtered_coins)} coins by market cap. Trends data is fetched from Google Trends.")
     
     # Add custom coin input
     custom_coins = st.text_input(
         "Add custom coins (optional)",
-        placeholder="Enter coin symbols separated by commas (e.g., BTC, ETH, DOGE)",
+        placeholder="Enter coin symbols of your choice separated by commas (e.g., UNI, NEAR, TAO, Pepe etc.)",
         help="Enter additional coin symbols to track, separated by commas"
     )
     
@@ -236,7 +273,7 @@ def main():
                 st.metric(
                     label=f"#{i+1} {coin['symbol']}", 
                     value=f"{coin['coin']}", 
-                    delta=f"Interest: {coin['avg_interest']:.1f}"
+                    delta=f"Interest: {coin['avg_interest']:.1f} {coin['direction']}"
                 )
         
         st.markdown("---")
