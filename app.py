@@ -33,7 +33,7 @@ COIN_SEARCH_TERMS = {
     'DOT': 'Polkadot',
     'MATIC': 'Polygon',
     'LINK': 'Chainlink',
-    'SHIB': 'Shiba Inu',
+    'SHIB': 'Shiba',
     'LTC': 'Litecoin',
     'TRX': 'Tron',
     'ATOM': 'Cosmos',
@@ -43,36 +43,37 @@ COIN_SEARCH_TERMS = {
     'XLM': 'Stellar',
     'NEAR': 'NEAR Protocol',
     'ALGO': 'Algorand',
-    'ICP': 'Internet Computer',
     'FIL': 'Filecoin',
     'VET': 'VeChain',
     'HBAR': 'Hedera',
     'APE': 'ApeCoin',
-    'SAND': 'The Sandbox',
+    'SAND': 'Sandbox',
     'MANA': 'Decentraland',
     'AAVE': 'Aave',
-    'GRT': 'The Graph',
-    'THETA': 'Theta Network',
+    'GRT': 'Graph',
+    'THETA': 'Theta',
     'FTM': 'Fantom',
     'XMR': 'Monero',
-    'EOS': 'EOS',
     'CAKE': 'PancakeSwap',
     'KCS': 'KuCoin Token',
-    'NEO': 'NEO',
     'CRO': 'Cronos',
     'ZEC': 'Zcash',
     'FLOW': 'Flow',
     'CHZ': 'Chiliz',
     'BAT': 'Basic Attention Token',
-    'ENJ': 'Enjin Coin',
+    'ENJ': 'Enjin',
     'ONE': 'Harmony',
-    'HOT': 'Holo',
+    'HOT': 'Holochain',
     'KLAY': 'Klaytn',
     'DASH': 'Dash',
     'WAVES': 'Waves',
     'COMP': 'Compound',
     'EGLD': 'MultiversX',
-    'XTZ': 'Tezos'
+    'XTZ': 'Tezos',
+    'RENDER': 'RNDR',
+    'WIF': 'dogwifhat',
+    'LEO': 'UNUS SED LEO',
+    'BNB': 'BNB'  # Special case, only use ticker
 }
 
 # Cache directory
@@ -168,8 +169,8 @@ def fetch_google_trends(coin):
             gprop=''
         )
         
-        # Add small delay to avoid rate limiting
-        time.sleep(2)
+        # Add longer delay to avoid rate limiting
+        time.sleep(5)
         
         interest_df = pytrends.interest_over_time()
         
@@ -187,6 +188,8 @@ def fetch_google_trends(coin):
         trends_data = []
         for index, row in interest_df.iterrows():
             total_value = sum(row[term] for term in search_terms)
+            # Normalize the sum to be between 0-100
+            total_value = min(100, total_value)
             trends_data.append({
                 'date': index.strftime('%Y-%m-%d %H:%M'),
                 'value': total_value
@@ -209,6 +212,9 @@ def fetch_google_trends(coin):
         
     except Exception as e:
         st.sidebar.error(f"Error for {symbol}: {str(e)}")
+        if "429" in str(e):
+            # Add extra delay on rate limit
+            time.sleep(10)
         return None
     
     return None
