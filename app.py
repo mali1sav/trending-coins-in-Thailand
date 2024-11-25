@@ -17,8 +17,9 @@ cg = CoinGeckoAPI()
 # Configure Streamlit page
 st.set_page_config(layout="wide")
 
-# List of known stablecoins to filter out
+# List of known stablecoins and derivatives to filter out
 STABLECOINS = {'USDT', 'USDC', 'BUSD', 'DAI', 'TUSD', 'USDP', 'USDD'}
+LIQUID_STAKING = {'STETH', 'WSTETH', 'RETH', 'FRXETH', 'ANKR', 'LDO', 'CRV', 'SD', 'SWISE', 'SDN', 'MATICX', 'STMX', 'cbETH', 'rETH2', 'cbETH', 'sETH2', 'ETH2X-FLI', 'ETH2', 'ETH2-FLI', 'sETH', 'ETH2X', 'rETH', 'cbETH-FLI', 'sETH-FLI', 'ETH2-FLI-P', 'ETH2-P', 'ETH2X-FLI-P', 'cbETH-P', 'sETH-FLI-P', 'sETH-P', 'ETH2X-P', 'rETH-P', 'cbETH-FLI-P', 'rETH-FLI', 'rETH-FLI-P', 'sETH2-FLI', 'sETH2-FLI-P', 'sETH2-P', 'stETH', 'stETH-FLI', 'stETH-FLI-P', 'stETH-P', 'wstETH', 'wstETH-FLI', 'wstETH-FLI-P', 'wstETH-P'}
 
 # Known search terms for popular coins
 COIN_SEARCH_TERMS = {
@@ -39,25 +40,70 @@ COIN_SEARCH_TERMS = {
     'ATOM': 'Cosmos',
     'UNI': 'Uniswap',
     'ETC': 'Ethereum Classic',
+    'BCH': 'Bitcoin Cash',
     'XLM': 'Stellar',
-    'OP': 'Optimism',
-    'NEAR': 'Near Protocol'
+    'NEAR': 'NEAR Protocol',
+    'ALGO': 'Algorand',
+    'ICP': 'Internet Computer',
+    'FIL': 'Filecoin',
+    'VET': 'VeChain',
+    'HBAR': 'Hedera',
+    'APE': 'ApeCoin',
+    'SAND': 'The Sandbox',
+    'MANA': 'Decentraland',
+    'AAVE': 'Aave',
+    'GRT': 'The Graph',
+    'THETA': 'Theta Network',
+    'FTM': 'Fantom',
+    'XMR': 'Monero',
+    'EOS': 'EOS',
+    'CAKE': 'PancakeSwap',
+    'KCS': 'KuCoin Token',
+    'NEO': 'NEO',
+    'CRO': 'Cronos',
+    'ZEC': 'Zcash',
+    'FLOW': 'Flow',
+    'CHZ': 'Chiliz',
+    'BAT': 'Basic Attention Token',
+    'ENJ': 'Enjin Coin',
+    'ONE': 'Harmony',
+    'HOT': 'Holo',
+    'KLAY': 'Klaytn',
+    'DASH': 'Dash',
+    'WAVES': 'Waves',
+    'COMP': 'Compound',
+    'EGLD': 'MultiversX',
+    'XTZ': 'Tezos'
 }
 
 # Cache directory
 CACHE_DIR = Path("cache")
 CACHE_DIR.mkdir(exist_ok=True)
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+@st.cache_data(ttl=3600)
 def get_top_coins():
-    """Get top coins from CoinGecko with caching"""
-    coins = cg.get_coins_markets(
-        vs_currency='usd',
-        order='market_cap_desc',
-        per_page=50,  # Get more to filter stablecoins
-        sparkline=False
-    )
-    return [coin for coin in coins if coin['symbol'].upper() not in STABLECOINS][:20]
+    """Get top coins from CoinGecko"""
+    try:
+        # Get top 500 coins to ensure we have enough after filtering
+        coins = cg.get_coins_markets(
+            vs_currency='usd',
+            order='market_cap_desc',
+            per_page=500,
+            sparkline=False
+        )
+        
+        # Filter out stablecoins and liquid staking tokens
+        filtered_coins = [
+            coin for coin in coins 
+            if coin['symbol'].upper() not in STABLECOINS 
+            and coin['symbol'].upper() not in LIQUID_STAKING
+        ]
+        
+        return filtered_coins[:100]  # Return top 100 after filtering
+        
+    except Exception as e:
+        st.error(f"Error fetching top coins: {str(e)}")
+        return []
 
 def get_cache_file(coin_symbol, timeframe):
     """Get cache file path for a coin"""
@@ -116,8 +162,8 @@ def fetch_google_trends(coin):
             gprop=''
         )
         
-        # Add small delay
-        time.sleep(1)
+        # Add small delay to avoid rate limiting
+        time.sleep(2)
         
         interest_df = pytrends.interest_over_time()
         
@@ -147,11 +193,7 @@ def fetch_google_trends(coin):
             }
     except Exception as e:
         st.sidebar.error(f"Error for {symbol}: {str(e)}")
-        return {
-            'coin': coin['name'],
-            'symbol': symbol,
-            'error': str(e)
-        }
+        return None
     
     return None
 
@@ -174,19 +216,32 @@ def get_recent_trends(results, hours=6):
                 x = np.arange(len(df))
                 slope, _, r_value, _, _ = stats.linregress(x, df['value'])
                 
-                # Calculate weighted score based on:
-                # 1. Trend direction and strength (slope)
-                # 2. Recent values (last 6 hours average)
-                # 3. Maximum value reached
+                # Get recent and historical metrics
                 recent_data = df.nlargest(hours, 'date')
                 recent_avg = recent_data['value'].mean()
                 max_value = df['value'].max()
                 
+                # Calculate momentum (acceleration of trend)
+                if len(df) > 2:
+                    half_point = len(df) // 2
+                    recent_slope, _, _, _, _ = stats.linregress(x[-half_point:], df['value'].iloc[-half_point:])
+                    older_slope, _, _, _, _ = stats.linregress(x[:half_point], df['value'].iloc[:half_point])
+                    momentum = recent_slope - older_slope
+                else:
+                    momentum = 0
+                
+                # Normalize components
+                norm_slope = slope * 50  # Scale slope to be comparable
+                norm_momentum = momentum * 25  # Scale momentum to be smaller than slope
+                norm_recent = recent_avg  # Keep recent average as is
+                norm_peak = max_value * 0.25  # Reduce impact of peak values
+                
                 # Combine factors into a single score
                 trend_score = (
-                    slope * 100 +  # Trend direction and strength
-                    recent_avg +   # Recent performance
-                    max_value * 0.5  # Peak performance
+                    norm_slope +     # Trend direction and strength
+                    norm_momentum +  # Trend acceleration
+                    norm_recent +    # Recent performance
+                    norm_peak       # Peak performance (reduced impact)
                 )
                 
                 recent_trends.append({
@@ -195,20 +250,21 @@ def get_recent_trends(results, hours=6):
                     'search_term': result['search_term'],
                     'avg_interest': recent_avg,
                     'trend_score': trend_score,
-                    'slope': slope
+                    'slope': slope,
+                    'momentum': momentum
                 })
     
     # Sort by trend score instead of just average interest
     sorted_trends = sorted(recent_trends, key=lambda x: x['trend_score'], reverse=True)
     
-    # Add trend direction indicators
+    # Add trend direction indicators with momentum
     for trend in sorted_trends:
         if trend['slope'] > 0:
-            trend['direction'] = '↗️'  # Rising
+            trend['direction'] = '↗️' if trend['momentum'] >= 0 else '➡️'
         elif trend['slope'] < 0:
-            trend['direction'] = '↘️'  # Falling
+            trend['direction'] = '↘️' if trend['momentum'] <= 0 else '➡️'
         else:
-            trend['direction'] = '➡️'  # Stable
+            trend['direction'] = '➡️'
     
     # Show debug information in sidebar
     st.sidebar.markdown("---")
@@ -217,6 +273,7 @@ def get_recent_trends(results, hours=6):
         st.sidebar.write(f"{trend['symbol']}:")
         st.sidebar.write(f"- Score: {trend['trend_score']:.1f}")
         st.sidebar.write(f"- Slope: {trend['slope']:.3f}")
+        st.sidebar.write(f"- Momentum: {trend['momentum']:.3f}")
         st.sidebar.write(f"- Recent Avg: {trend['avg_interest']:.1f}")
     
     return sorted_trends[:5]
