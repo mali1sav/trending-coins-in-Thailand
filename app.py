@@ -84,11 +84,11 @@ CACHE_DIR.mkdir(exist_ok=True)
 def get_top_coins():
     """Get top coins from CoinGecko"""
     try:
-        # Get top 500 coins to ensure we have enough after filtering
+        # Get top 50 coins
         coins = cg.get_coins_markets(
             vs_currency='usd',
             order='market_cap_desc',
-            per_page=500,
+            per_page=50,
             sparkline=False
         )
         
@@ -99,7 +99,7 @@ def get_top_coins():
             and coin['symbol'].upper() not in LIQUID_STAKING
         ]
         
-        return filtered_coins[:100]  # Return top 100 after filtering
+        return filtered_coins  # Return all filtered coins from top 50
         
     except Exception as e:
         st.error(f"Error fetching top coins: {str(e)}")
