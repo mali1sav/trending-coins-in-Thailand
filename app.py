@@ -147,15 +147,22 @@ def fetch_google_trends(coin):
         }
     
     try:
-        search_term = COIN_SEARCH_TERMS.get(symbol, coin['name'])
+        # For BNB, just use the ticker
+        if symbol == 'BNB':
+            search_terms = [symbol]
+        else:
+            # For other coins, use both ticker and full name if available
+            full_name = COIN_SEARCH_TERMS.get(symbol, coin['name'])
+            search_terms = [symbol, full_name] if symbol != full_name else [symbol]
+        
         pytrends = TrendReq(hl='en-US', 
                            tz=420,
                            timeout=(10,25),
                            requests_args={'verify': True})
         
-        # Build payload with minimal parameters
+        # Build payload with all search terms
         pytrends.build_payload(
-            kw_list=[search_term],
+            kw_list=search_terms,
             timeframe=timeframe,
             geo='TH',
             gprop=''
@@ -168,28 +175,38 @@ def fetch_google_trends(coin):
         
         # Debug information
         st.sidebar.write(f"Debug - {symbol}:")
-        st.sidebar.write(f"Search term: {search_term}")
+        st.sidebar.write(f"Search terms: {', '.join(search_terms)}")
+        
         if interest_df.empty:
             st.sidebar.error(f"No data returned for {symbol}")
-        else:
-            st.sidebar.write(f"Data points: {len(interest_df)}")
-            st.sidebar.write(f"Value range: {interest_df[search_term].min()} - {interest_df[search_term].max()}")
+            return None
         
-        if not interest_df.empty:
-            trends_data = [{
+        st.sidebar.write(f"Data points: {len(interest_df)}")
+        
+        # Aggregate values from all search terms
+        trends_data = []
+        for index, row in interest_df.iterrows():
+            total_value = sum(row[term] for term in search_terms)
+            trends_data.append({
                 'date': index.strftime('%Y-%m-%d %H:%M'),
-                'value': row[search_term]
-            } for index, row in interest_df.iterrows()]
-            
-            save_to_cache(symbol, timeframe, trends_data)
-            
-            return {
-                'coin': coin['name'],
-                'symbol': symbol,
-                'market_cap_rank': coin['market_cap_rank'],
-                'trends_data': trends_data,
-                'search_term': search_term
-            }
+                'value': total_value
+            })
+        
+        # Show value ranges for debugging
+        if trends_data:
+            values = [d['value'] for d in trends_data]
+            st.sidebar.write(f"Value range: {min(values)} - {max(values)}")
+        
+        save_to_cache(symbol, timeframe, trends_data)
+        
+        return {
+            'coin': coin['name'],
+            'symbol': symbol,
+            'market_cap_rank': coin['market_cap_rank'],
+            'trends_data': trends_data,
+            'search_term': ' + '.join(search_terms)
+        }
+        
     except Exception as e:
         st.sidebar.error(f"Error for {symbol}: {str(e)}")
         return None
