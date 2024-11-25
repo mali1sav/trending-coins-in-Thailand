@@ -121,6 +121,15 @@ def fetch_google_trends(coin):
         
         interest_df = pytrends.interest_over_time()
         
+        # Debug information
+        st.sidebar.write(f"Debug - {symbol}:")
+        st.sidebar.write(f"Search term: {search_term}")
+        if interest_df.empty:
+            st.sidebar.error(f"No data returned for {symbol}")
+        else:
+            st.sidebar.write(f"Data points: {len(interest_df)}")
+            st.sidebar.write(f"Value range: {interest_df[search_term].min()} - {interest_df[search_term].max()}")
+        
         if not interest_df.empty:
             trends_data = [{
                 'date': index.strftime('%Y-%m-%d %H:%M'),
@@ -137,7 +146,12 @@ def fetch_google_trends(coin):
                 'search_term': search_term
             }
     except Exception as e:
-        st.error(f"Error fetching trends for {symbol}: {str(e)}")
+        st.sidebar.error(f"Error for {symbol}: {str(e)}")
+        return {
+            'coin': coin['name'],
+            'symbol': symbol,
+            'error': str(e)
+        }
     
     return None
 
@@ -195,6 +209,15 @@ def get_recent_trends(results, hours=6):
             trend['direction'] = '↘️'  # Falling
         else:
             trend['direction'] = '➡️'  # Stable
+    
+    # Show debug information in sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### Trend Scores")
+    for trend in sorted_trends:
+        st.sidebar.write(f"{trend['symbol']}:")
+        st.sidebar.write(f"- Score: {trend['trend_score']:.1f}")
+        st.sidebar.write(f"- Slope: {trend['slope']:.3f}")
+        st.sidebar.write(f"- Recent Avg: {trend['avg_interest']:.1f}")
     
     return sorted_trends[:5]
 
