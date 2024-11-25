@@ -184,21 +184,31 @@ def fetch_google_trends(coin):
         
         st.sidebar.write(f"Data points: {len(interest_df)}")
         
-        # Aggregate values from all search terms
-        trends_data = []
+        # First pass: calculate raw sums for each timestamp
+        raw_trends = []
+        max_value = 0
         for index, row in interest_df.iterrows():
             total_value = sum(row[term] for term in search_terms)
-            # Normalize the sum to be between 0-100
-            total_value = min(100, total_value)
-            trends_data.append({
+            max_value = max(max_value, total_value)
+            raw_trends.append({
                 'date': index.strftime('%Y-%m-%d %H:%M'),
                 'value': total_value
+            })
+        
+        # Second pass: normalize values relative to the maximum
+        trends_data = []
+        for trend in raw_trends:
+            normalized_value = (trend['value'] / max_value * 100) if max_value > 0 else 0
+            trends_data.append({
+                'date': trend['date'],
+                'value': normalized_value
             })
         
         # Show value ranges for debugging
         if trends_data:
             values = [d['value'] for d in trends_data]
-            st.sidebar.write(f"Value range: {min(values)} - {max(values)}")
+            st.sidebar.write(f"Raw value range: {min(raw_trends, key=lambda x: x['value'])['value']:.1f} - {max_value:.1f}")
+            st.sidebar.write(f"Normalized range: {min(values):.1f} - {max(values):.1f}")
         
         save_to_cache(symbol, timeframe, trends_data)
         
