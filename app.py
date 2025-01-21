@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import numpy as np
 from scipy import stats
+from scipy.stats import zscore
 
 # Initialize APIs
 cg = CoinGeckoAPI()
@@ -174,41 +175,31 @@ def fetch_google_trends(coin):
         
         interest_df = pytrends.interest_over_time()
         
-        # Debug information
-        st.sidebar.write(f"Debug - {symbol}:")
-        st.sidebar.write(f"Search terms: {', '.join(search_terms)}")
-        
         if interest_df.empty:
             st.sidebar.error(f"No data returned for {symbol}")
             return None
         
-        st.sidebar.write(f"Data points: {len(interest_df)}")
-        
-        # First pass: calculate raw sums for each timestamp
-        raw_trends = []
-        max_value = 0
+        # Calculate Z-scores for normalization
+        raw_values = []
         for index, row in interest_df.iterrows():
             total_value = sum(row[term] for term in search_terms)
-            max_value = max(max_value, total_value)
-            raw_trends.append({
-                'date': index.strftime('%Y-%m-%d %H:%M'),
-                'value': total_value
-            })
+            raw_values.append(total_value)
         
-        # Second pass: normalize values relative to the maximum
+        # Z-score normalization
+        z_scores = zscore(raw_values)
+        
         trends_data = []
-        for trend in raw_trends:
-            normalized_value = (trend['value'] / max_value * 100) if max_value > 0 else 0
+        for index, z in zip(interest_df.index, z_scores):
             trends_data.append({
-                'date': trend['date'],
-                'value': normalized_value
+                'date': index.strftime('%Y-%m-%d %H:%M'),
+                'value': z
             })
         
-        # Show value ranges for debugging
-        if trends_data:
-            values = [d['value'] for d in trends_data]
-            st.sidebar.write(f"Raw value range: {min(raw_trends, key=lambda x: x['value'])['value']:.1f} - {max_value:.1f}")
-            st.sidebar.write(f"Normalized range: {min(values):.1f} - {max(values):.1f}")
+        # Calculate spike ratio
+        df_coin = pd.DataFrame(trends_data)
+        df_coin['value'] = pd.to_numeric(df_coin['value'])
+        df_coin['ma_6h'] = df_coin['value'].rolling(window=6).mean()
+        spike_ratio = (df_coin['value'].iloc[-1] / df_coin['ma_6h'].iloc[-6]) if len(df_coin) >= 6 else 1
         
         save_to_cache(symbol, timeframe, trends_data)
         
@@ -217,7 +208,8 @@ def fetch_google_trends(coin):
             'symbol': symbol,
             'market_cap_rank': coin['market_cap_rank'],
             'trends_data': trends_data,
-            'search_term': ' + '.join(search_terms)
+            'search_term': ' + '.join(search_terms),
+            'spike_ratio': spike_ratio
         }
         
     except Exception as e:
@@ -226,53 +218,69 @@ def fetch_google_trends(coin):
             # Add extra delay on rate limit
             time.sleep(10)
         return None
-    
-    return None
 
 def get_recent_trends(results, hours=6):
-    """Get the most recent trend data and calculate average interest"""
+    """Improved trending detection using multiple factors"""
     recent_trends = []
     
     for result in results:
         trends = result['trends_data']
         if trends:
             df = pd.DataFrame(trends)
-            df['date'] = pd.to_datetime(df['date'])
+            df['value'] = pd.to_numeric(df['value'])
             
-            # Get just the last 6 hours of data
-            recent_data = df.nlargest(hours, 'date')
+            # Get time windows
+            recent = df.nlargest(hours, 'date')
+            previous = df.nsmallest(hours, 'date')
             
-            if not recent_data.empty:
-                avg_interest = recent_data['value'].mean()
-                recent_trends.append({
-                    'coin': result['coin'],
-                    'symbol': result['symbol'],
-                    'search_term': result['search_term'],
-                    'avg_interest': avg_interest
-                })
+            if len(recent) < hours or len(previous) < hours:
+                continue
+                
+            # Calculate metrics
+            avg_recent = recent['value'].mean()
+            avg_previous = previous['value'].mean()
+            
+            # Trending score combines multiple factors
+            trending_score = (
+                0.4 * avg_recent +
+                0.4 * (avg_recent - avg_previous) +
+                0.2 * result.get('spike_ratio', 1)
+            )
+            
+            recent_trends.append({
+                'coin': result['coin'],
+                'symbol': result['symbol'],
+                'search_term': result['search_term'],
+                'trending_score': trending_score,
+                'change_pct': ((avg_recent - avg_previous)/avg_previous)*100 if avg_previous != 0 else 0,
+                'avg_interest': avg_recent
+            })
     
-    # Sort by average interest and return top 5
-    sorted_trends = sorted(recent_trends, key=lambda x: x['avg_interest'], reverse=True)
+    # Sort by trending score
+    sorted_trends = sorted(recent_trends, key=lambda x: x['trending_score'], reverse=True)
     
-    # Add trend indicators
+    # Add visual indicators
     for trend in sorted_trends:
-        if trend['avg_interest'] > 0:
-            trend['direction'] = '↗️'
+        if trend['change_pct'] > 50:
+            trend['direction'] = '↑↑'
+        elif trend['change_pct'] > 25:
+            trend['direction'] = '↑'
         else:
-            trend['direction'] = '➡️'
-    
-    # Show debug information in sidebar
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### Search Interest (Last 6 Hours)")
-    for trend in sorted_trends:
-        st.sidebar.write(f"{trend['symbol']}:")
-        st.sidebar.write(f"- Search term: {trend['search_term']}")
-        st.sidebar.write(f"- Interest: {trend['avg_interest']:.1f}")
+            trend['direction'] = '→'
     
     return sorted_trends[:5]
 
 def main():
-    st.title("Trending Cryptocurrency in Thailand")
+    st.title("🚀 Trending Cryptocurrency in Thailand")
+    
+    # Add time window selector
+    time_window = st.slider(
+        "Select trending time window (hours):",
+        min_value=3,
+        max_value=24,
+        value=6,
+        step=3
+    )
     
     # Get top coins (cached)
     with st.spinner("Fetching top 20 cryptocurrencies by market cap..."):
@@ -289,13 +297,10 @@ def main():
     # Process custom coins if provided
     if custom_coins:
         custom_symbols = [s.strip().upper() for s in custom_coins.split(',')]
-        # Add custom coins to the filtered list if they're not already there
         existing_symbols = {coin['symbol'].upper() for coin in filtered_coins}
         for symbol in custom_symbols:
             if symbol and symbol not in existing_symbols:
                 try:
-                    # Try to get coin info from CoinGecko
-                    cg = CoinGeckoAPI()
                     coins_list = cg.get_coins_list()
                     coin_info = next((coin for coin in coins_list if coin['symbol'].upper() == symbol), None)
                     if coin_info:
@@ -324,7 +329,7 @@ def main():
                 else:
                     results.append(result)
             progress_bar.progress((i + 1) / len(filtered_coins))
-            time.sleep(1)  # Add delay between requests
+            time.sleep(1)
         
         progress_bar.empty()
         
@@ -332,22 +337,30 @@ def main():
             st.error("No trend data available. Please try again later.")
             return
 
-        # Get top 5 trending coins in the last 6 hours
-        top_trending = get_recent_trends(results, hours=6)
+        # Get top 5 trending coins
+        top_trending = get_recent_trends(results, hours=time_window)
         
         # Display top trending coins
-        st.header(" Top 5 Trending Coins in Thailand")
-        st.caption("Based on search interest in the last 6 hours")
+        st.header("🔥 Top 5 Trending Coins")
+        st.caption(f"Based on composite trending score (Last {time_window} hours)")
         
-        # Create columns for trending coins
+        # Create columns with color coding
         cols = st.columns(5)
+        colors = ['#4CAF50', '#8BC34A', '#CDDC39', '#FFEB3B', '#FFC107']
+        
         for i, (col, coin) in enumerate(zip(cols, top_trending)):
             with col:
+                delta_color = "normal" if i < 2 else "off" if i < 4 else "inverse"
                 st.metric(
-                    label=f"#{i+1} {coin['symbol']}", 
-                    value=f"{coin['coin']}", 
-                    delta=f"Interest: {coin['avg_interest']:.1f} {coin['direction']}"
+                    label=f"**#{i+1}** {coin['symbol']}",
+                    value=coin['coin'],
+                    delta=f"{coin['change_pct']:.1f}% {coin['direction']}",
+                    delta_color=delta_color
                 )
+                
+                # Add mini sparkline
+                spark_data = pd.DataFrame([p['value'] for p in next(r for r in results if r['symbol'] == coin['symbol'])['trends_data']][-24:])
+                col.line_chart(spark_data, height=50, use_container_width=True)
         
         st.markdown("---")
 
@@ -357,53 +370,55 @@ def main():
             for point in result['trends_data']:
                 trend_data.append({
                     'Date': point['date'],
-                    'Interest': point['value'],
+                    'Z-Score': point['value'],
                     'Cryptocurrency': f"{result['symbol']}"
                 })
 
         df = pd.DataFrame(trend_data)
         
-        # Create the line chart using Plotly
+        # Create faceted line chart
         fig = px.line(
             df,
             x='Date',
-            y='Interest',
+            y='Z-Score',
             color='Cryptocurrency',
-            title='Cryptocurrency Search Interest (Last 3 Days)',
-            labels={'Interest': 'Search Interest', 'Date': 'Date'}
+            facet_row='Cryptocurrency',
+            height=200 * len(df['Cryptocurrency'].unique()),
+            title='Normalized Search Interest (Z-Scores)'
         )
         
-        # Update layout for better readability
+        # Update layout
         fig.update_layout(
-            height=800,
-            showlegend=True,
-            legend=dict(
-                yanchor="top",
-                y=0.99,
-                xanchor="left",
-                x=1.05
-            ),
-            xaxis=dict(
-                tickmode='auto',
-                nticks=12
-            )
+            showlegend=False,
+            hovermode='x unified',
+            margin=dict(t=100),
+            yaxis_title="Z-Score"
         )
-
-        # Display the chart with full width
+        
+        # Configure subplots
+        fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+        fig.update_yaxes(matches=None, showticklabels=True)
+        
+        # Display the chart
         st.plotly_chart(fig, use_container_width=True)
         
-        # Add expander at the bottom for processing details
-        with st.expander("Show Processing Details"):
-            st.write("Processed the following coins:")
-            for coin in filtered_coins:
-                st.write(f"- {coin['name']} ({coin['symbol'].upper()})")
-                
-        # Add expander for errors at the bottom
+        # Add expanders for details
+        with st.expander("Technical Details"):
+            st.markdown("""
+            **Methodology:**
+            - Trends normalized using Z-scores (standard deviations from mean)
+            - Trending score combines:
+              * Recent interest (40%)
+              * Momentum vs previous period (40%)
+              * Recent spikes (20%)
+            - Data cached for 1 hour to prevent API abuse
+            """)
+            
         if errors:
-            with st.expander("Show Error Details"):
-                st.write("The following coins had errors during processing:")
+            with st.expander("Error Log"):
+                st.write("Failed to process these coins:")
                 for error in errors:
-                    st.write(f"- {error['coin']} ({error['symbol']}): {error['error']}")
+                    st.write(f"- {error.get('symbol', 'Unknown')}: {error.get('error', 'Unknown error')}")
 
 if __name__ == "__main__":
     main()
