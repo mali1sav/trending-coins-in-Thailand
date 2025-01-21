@@ -384,30 +384,40 @@ def main():
         df = pd.DataFrame(trend_data)
         
         # Create faceted line chart
-        fig = px.line(
-            df,
-            x='Date',
-            y='Z-Score',
-            color='Cryptocurrency',
-            facet_row='Cryptocurrency',
-            height=200 * len(df['Cryptocurrency'].unique()),
-            title='Normalized Search Interest (Z-Scores)'
-        )
-        
-        # Update layout
-        fig.update_layout(
-            showlegend=False,
-            hovermode='x unified',
-            margin=dict(t=100),
-            yaxis_title="Z-Score"
-        )
-        
-        # Configure subplots
-        fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
-        fig.update_yaxes(matches=None, showticklabels=True)
-        
-        # Display the chart
-        st.plotly_chart(fig, use_container_width=True)
+        if len(df) > 0:
+            try:
+                # Create faceted line chart
+                fig = px.line(
+                    df,
+                    x='Date',
+                    y='Z-Score',
+                    color='Cryptocurrency',
+                    facet_row='Cryptocurrency',
+                    height=200 * len(df['Cryptocurrency'].unique()),
+                    title='Normalized Search Interest (Z-Scores)'
+                )
+                
+                # Update layout
+                fig.update_layout(
+                    showlegend=False,
+                    hovermode='x unified',
+                    margin=dict(t=100),
+                    yaxis_title="Z-Score"
+                )
+                
+                # Configure subplots
+                fig.for_each_annotation(lambda a: a.update(text=a.text.split("=")[-1]))
+                fig.update_yaxes(matches=None, showticklabels=True)
+                
+                # Display the chart
+                st.plotly_chart(fig, use_container_width=True)
+                
+            except Exception as e:
+                st.error(f"Error creating plot: {str(e)}")
+                st.write("Debug Data:")
+                st.write(df)
+        else:
+            st.warning("No valid trend data available to plot.")
         
         # Add expanders for details
         with st.expander("Technical Details"):
