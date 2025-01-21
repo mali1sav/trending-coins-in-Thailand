@@ -129,10 +129,9 @@ def save_to_cache(coin_symbol, timeframe, trends_data):
     }
     cache_file.write_text(json.dumps(data))
 
-def fetch_google_trends(coin):
-    """Fetch Google Trends data for a given coin with caching"""
+def fetch_google_trends(coin, retries=3):
+    """Fetch Google Trends data for a given coin with caching and retries"""
     symbol = coin['symbol'].upper()
-    # Use exact timeframe format that Google expects
     end_time = datetime.now()
     start_time = end_time - timedelta(days=3)
     timeframe = f"{start_time.strftime('%Y-%m-%d')} {end_time.strftime('%Y-%m-%d')}"
@@ -148,76 +147,81 @@ def fetch_google_trends(coin):
             'search_term': COIN_SEARCH_TERMS.get(symbol, coin['name'])
         }
     
-    try:
-        # For BNB, just use the ticker
-        if symbol == 'BNB':
-            search_terms = [symbol]
-        else:
-            # For other coins, use both ticker and full name if available
-            full_name = COIN_SEARCH_TERMS.get(symbol, coin['name'])
-            search_terms = [symbol, full_name] if symbol != full_name else [symbol]
-        
-        pytrends = TrendReq(hl='en-US', 
-                           tz=420,
-                           timeout=(10,25),
-                           requests_args={'verify': True})
-        
-        # Build payload with all search terms
-        pytrends.build_payload(
-            kw_list=search_terms,
-            timeframe=timeframe,
-            geo='TH',
-            gprop=''
-        )
-        
-        # Add longer delay to avoid rate limiting
-        time.sleep(5)
-        
-        interest_df = pytrends.interest_over_time()
-        
-        if interest_df.empty:
-            st.sidebar.error(f"No data returned for {symbol}")
+    for attempt in range(retries):
+        try:
+            # For BNB, just use the ticker
+            if symbol == 'BNB':
+                search_terms = [symbol]
+            else:
+                # For other coins, use both ticker and full name if available
+                full_name = COIN_SEARCH_TERMS.get(symbol, coin['name'])
+                search_terms = [symbol, full_name] if symbol != full_name else [symbol]
+            
+            pytrends = TrendReq(hl='en-US', 
+                               tz=420,
+                               timeout=(10, 25),
+                               requests_args={'verify': True})
+            
+            # Build payload with all search terms
+            pytrends.build_payload(
+                kw_list=search_terms,
+                timeframe=timeframe,
+                geo='TH',
+                gprop=''
+            )
+            
+            # Add delay to avoid rate limiting
+            time.sleep(10)  # Increased delay to 10 seconds
+            
+            interest_df = pytrends.interest_over_time()
+            
+            if interest_df.empty:
+                st.sidebar.warning(f"No data returned for {symbol}")
+                return None
+            
+            # Calculate Z-scores for normalization
+            raw_values = []
+            for index, row in interest_df.iterrows():
+                total_value = sum(row[term] for term in search_terms)
+                raw_values.append(total_value)
+            
+            # Z-score normalization
+            z_scores = zscore(raw_values)
+            
+            trends_data = []
+            for index, z in zip(interest_df.index, z_scores):
+                trends_data.append({
+                    'date': index.strftime('%Y-%m-%d %H:%M'),
+                    'value': z
+                })
+            
+            # Calculate spike ratio
+            df_coin = pd.DataFrame(trends_data)
+            df_coin['value'] = pd.to_numeric(df_coin['value'])
+            df_coin['ma_6h'] = df_coin['value'].rolling(window=6).mean()
+            spike_ratio = (df_coin['value'].iloc[-1] / df_coin['ma_6h'].iloc[-6]) if len(df_coin) >= 6 else 1
+            
+            save_to_cache(symbol, timeframe, trends_data)
+            
+            return {
+                'coin': coin['name'],
+                'symbol': symbol,
+                'market_cap_rank': coin['market_cap_rank'],
+                'trends_data': trends_data,
+                'search_term': ' + '.join(search_terms),
+                'spike_ratio': spike_ratio
+            }
+            
+        except Exception as e:
+            if "429" in str(e):
+                st.sidebar.warning(f"Rate limit hit for {symbol}. Retrying ({attempt + 1}/{retries})...")
+                time.sleep(30)  # Longer delay on rate limit
+                continue
+            st.sidebar.error(f"Error for {symbol}: {str(e)}")
             return None
-        
-        # Calculate Z-scores for normalization
-        raw_values = []
-        for index, row in interest_df.iterrows():
-            total_value = sum(row[term] for term in search_terms)
-            raw_values.append(total_value)
-        
-        # Z-score normalization
-        z_scores = zscore(raw_values)
-        
-        trends_data = []
-        for index, z in zip(interest_df.index, z_scores):
-            trends_data.append({
-                'date': index.strftime('%Y-%m-%d %H:%M'),
-                'value': z
-            })
-        
-        # Calculate spike ratio
-        df_coin = pd.DataFrame(trends_data)
-        df_coin['value'] = pd.to_numeric(df_coin['value'])
-        df_coin['ma_6h'] = df_coin['value'].rolling(window=6).mean()
-        spike_ratio = (df_coin['value'].iloc[-1] / df_coin['ma_6h'].iloc[-6]) if len(df_coin) >= 6 else 1
-        
-        save_to_cache(symbol, timeframe, trends_data)
-        
-        return {
-            'coin': coin['name'],
-            'symbol': symbol,
-            'market_cap_rank': coin['market_cap_rank'],
-            'trends_data': trends_data,
-            'search_term': ' + '.join(search_terms),
-            'spike_ratio': spike_ratio
-        }
-        
-    except Exception as e:
-        st.sidebar.error(f"Error for {symbol}: {str(e)}")
-        if "429" in str(e):
-            # Add extra delay on rate limit
-            time.sleep(10)
-        return None
+    
+    st.sidebar.error(f"Failed to fetch data for {symbol} after {retries} attempts.")
+    return None
 
 def get_recent_trends(results, hours=6):
     """Improved trending detection using multiple factors"""
@@ -228,10 +232,11 @@ def get_recent_trends(results, hours=6):
         if trends:
             df = pd.DataFrame(trends)
             df['value'] = pd.to_numeric(df['value'])
+            df['date'] = pd.to_datetime(df['date'])  # Ensure date is datetime
             
             # Get time windows
-            recent = df.nlargest(hours, 'date')
-            previous = df.nsmallest(hours, 'date')
+            recent = df.sort_values('date', ascending=False).head(hours)
+            previous = df.sort_values('date', ascending=True).head(hours)
             
             if len(recent) < hours or len(previous) < hours:
                 continue
@@ -318,6 +323,7 @@ def main():
     results = []
     errors = []
     
+    # In the main() function, update the processing loop:
     with st.spinner("Fetching Google Trends data..."):
         progress_bar = st.progress(0)
         
@@ -329,9 +335,10 @@ def main():
                 else:
                     results.append(result)
             progress_bar.progress((i + 1) / len(filtered_coins))
-            time.sleep(1)
+            time.sleep(15)  # Add a 15-second delay between requests
         
         progress_bar.empty()
+
         
         if not results:
             st.error("No trend data available. Please try again later.")
