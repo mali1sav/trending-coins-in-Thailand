@@ -382,7 +382,31 @@ def main():
                 })
 
         df = pd.DataFrame(trend_data)
+
+        # Add Data Formatting:
+        if len(df) > 0:
+            # Ensure 'Cryptocurrency' column has unique values
+            unique_coins = df['Cryptocurrency'].unique()
+            if len(unique_coins) == 0:
+                st.warning("No valid cryptocurrencies found in the data.")
+                return
+            
+            # Ensure 'Z-Score' column is numeric
+            if not pd.api.types.is_numeric_dtype(df['Z-Score']):
+                st.error("Invalid data format: Z-Score must be numeric.")
+                st.write("Debug Data:")
+                st.write(df)
+                return
+
+        #Handle Edge Cases in Data Fetching
+        if len(results) == 0:
+        st.error("No trend data available for any coin. Please try again later.")
+        return
         
+        #Debugging output
+        st.write("Debug: Trend Data")
+        st.write(df)
+
         # Create faceted line chart
         if len(df) > 0:
             try:
